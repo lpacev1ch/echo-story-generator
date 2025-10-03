@@ -1,7 +1,5 @@
 import { useState } from 'react';
 import { BookOpen, Sparkles, Loader2 } from 'lucide-react';
-import { EchoSignIn, useEcho, useEchoModelProviders } from '@merit-systems/echo-react-sdk';
-import { streamText } from 'ai';
 
 const genres = [
   { id: 'fantasy', name: '🧙‍♂️ Fantasy', prompt: 'a magical fantasy world' },
@@ -24,32 +22,70 @@ function StoryGenerator() {
   const [customPrompt, setCustomPrompt] = useState('');
   const [story, setStory] = useState('');
   const [isGenerating, setIsGenerating] = useState(false);
-  
-  const { openai } = useEchoModelProviders();
-  
+  const [apiKey, setApiKey] = useState('');
+  const [showApiKeyInput, setShowApiKeyInput] = useState(true);
+
   const generateStory = async () => {
+    if (!apiKey) {
+      alert('Please enter your OpenAI API key first!');
+      return;
+    }
+
     setIsGenerating(true);
     setStory('');
-    
+
     try {
       const genre = genres.find(g => g.id === selectedGenre);
       const tone = tones.find(t => t.id === selectedTone);
       const prompt = customPrompt || 
         `Write a creative short story (about 200-300 words) in ${genre?.prompt} with a ${tone?.name.toLowerCase()} tone. Make it engaging and vivid.`;
-      
-      const { textStream } = await streamText({
-        model: openai('gpt-4o-mini'),
-        messages: [
-          { role: 'user', content: prompt }
-        ]
+
+      const response = await fetch('https://api.openai.com/v1/chat/completions', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${apiKey}`
+        },
+        body: JSON.stringify({
+          model: 'gpt-3.5-turbo',
+          messages: [
+            { role: 'user', content: prompt }
+          ],
+          stream: true
+        })
       });
-      
-      for await (const chunk of textStream) {
-        setStory(prev => prev + chunk);
+
+      if (!response.ok) {
+        throw new Error('Failed to generate story');
+      }
+
+      const reader = response.body?.getReader();
+      const decoder = new TextDecoder();
+
+      while (reader) {
+        const { done, value } = await reader.read();
+        if (done) break;
+
+        const chunk = decoder.decode(value);
+        const lines = chunk.split('\n');
+
+        for (const line of lines) {
+          if (line.startsWith('data: ') && line !== 'data: [DONE]') {
+            try {
+              const json = JSON.parse(line.slice(6));
+              const content = json.choices[0]?.delta?.content;
+              if (content) {
+                setStory(prev => prev + content);
+              }
+            } catch (e) {
+              // Skip invalid JSON
+            }
+          }
+        }
       }
     } catch (error) {
       console.error('Error generating story:', error);
-      setStory('Sorry, there was an error generating your story. Please try again.');
+      setStory('Sorry, there was an error generating your story. Please check your API key and try again.');
     } finally {
       setIsGenerating(false);
     }
@@ -57,6 +93,41 @@ function StoryGenerator() {
 
   return (
     <div className="max-w-4xl mx-auto space-y-6">
+      {showApiKeyInput && (
+        <div className="bg-yellow-50 border border-yellow-200 rounded-xl p-6">
+          <h3 className="text-lg font-semibold text-yellow-900 mb-2">
+            🔑 OpenAI API Key Required
+          </h3>
+          <p className="text-sm text-yellow-700 mb-4">
+            Enter your OpenAI API key to generate stories. Get one at{' '}
+            <a 
+              href="https://platform.openai.com/api-keys" 
+              target="_blank" 
+              rel="noopener noreferrer"
+              className="underline"
+            >
+              platform.openai.com
+            </a>
+          </p>
+          <div className="flex gap-2">
+            <input
+              type="password"
+              value={apiKey}
+              onChange={(e) => setApiKey(e.target.value)}
+              placeholder="sk-..."
+              className="flex-1 p-3 border border-yellow-300 rounded-lg focus:ring-2 focus:ring-yellow-500 focus:border-transparent"
+            />
+            <button
+              onClick={() => setShowApiKeyInput(false)}
+              disabled={!apiKey}
+              className="px-6 py-3 bg-yellow-600 text-white rounded-lg hover:bg-yellow-700 disabled:opacity-50"
+            >
+              Save
+            </button>
+          </div>
+        </div>
+      )}
+
       <div className="bg-white rounded-xl shadow-lg p-6 space-y-6">
         <div>
           <label className="block text-sm font-medium text-gray-700 mb-3">
@@ -115,7 +186,7 @@ function StoryGenerator() {
 
         <button
           onClick={generateStory}
-          disabled={isGenerating}
+          disabled={isGenerating || !apiKey}
           className="w-full py-4 bg-gradient-to-r from-purple-600 to-pink-600 text-white rounded-lg font-semibold hover:from-purple-700 hover:to-pink-700 transition-all disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
         >
           {isGenerating ? (
@@ -153,8 +224,6 @@ function StoryGenerator() {
 }
 
 function App() {
-  const { isAuthenticated, user, balance, signOut } = useEcho();
-
   return (
     <div className="min-h-screen bg-gradient-to-br from-purple-50 via-pink-50 to-blue-50">
       <header className="bg-white shadow-sm border-b border-gray-200">
@@ -165,59 +234,18 @@ function App() {
             </div>
             <div>
               <h1 className="text-xl font-bold text-gray-900">AI Story Generator</h1>
-              <p className="text-xs text-gray-500">Powered by Echo</p>
+              <p className="text-xs text-gray-500">Powered by OpenAI</p>
             </div>
-          </div>
-          
-          <div className="flex items-center gap-4">
-            {!isAuthenticated && (
-              <>
-                <span className="text-sm text-gray-600">Sign in to start creating</span>
-                <EchoSignIn />
-              </>
-            )}
-            {isAuthenticated && (
-              <div className="flex items-center gap-4">
-                <div className="text-right">
-                  <p className="text-sm font-medium text-gray-900">{user?.name}</p>
-                  <p className="text-xs text-gray-500">
-                    Balance: ${balance?.balance || '0.00'}
-                  </p>
-                </div>
-                <button
-                  onClick={signOut}
-                  className="px-4 py-2 text-sm text-gray-600 hover:text-gray-900 transition-colors"
-                >
-                  Sign Out
-                </button>
-              </div>
-            )}
           </div>
         </div>
       </header>
 
       <main className="max-w-6xl mx-auto px-4 py-12">
-        {!isAuthenticated ? (
-          <div className="text-center py-20">
-            <div className="w-20 h-20 bg-gradient-to-br from-purple-600 to-pink-600 rounded-full flex items-center justify-center mx-auto mb-6">
-              <BookOpen className="w-10 h-10 text-white" />
-            </div>
-            <h2 className="text-3xl font-bold text-gray-900 mb-4">
-              Create Amazing Stories with AI
-            </h2>
-            <p className="text-lg text-gray-600 mb-8 max-w-2xl mx-auto">
-              Generate unique stories in any genre with customizable tones. 
-              Sign in with Echo to start creating your masterpiece.
-            </p>
-            <EchoSignIn />
-          </div>
-        ) : (
-          <StoryGenerator />
-        )}
+        <StoryGenerator />
       </main>
 
       <footer className="max-w-6xl mx-auto px-4 py-8 text-center text-sm text-gray-500">
-        Built with Echo • Pay-per-use AI billing made simple
+        Built with React + OpenAI
       </footer>
     </div>
   );
